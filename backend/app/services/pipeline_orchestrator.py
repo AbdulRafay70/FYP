@@ -178,7 +178,10 @@ class PipelineOrchestrator:
                 results["bounding_box"] = [int(x1_pad), int(y1_pad), int(x2_pad), int(y2_pad)]
                 
                 # Re-create detection overlay using U-Net bounding box
-                img_3ch = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR) if image.ndim == 2 else image.copy()
+                if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
+                    img_3ch = cv2.cvtColor(image.squeeze(), cv2.COLOR_GRAY2BGR)
+                else:
+                    img_3ch = image.copy()
                 cv2.rectangle(img_3ch, (x1_pad, y1_pad), (x2_pad, y2_pad), (0, 255, 0), 2)
                 cv2.putText(img_3ch, "Tumor Detected (U-Net Fallback)", (x1_pad, y1_pad - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -238,11 +241,15 @@ class PipelineOrchestrator:
             # Fallback: return the full image as ROI
             return {"detected": False, "roi": image, "bbox": None, "overlay": None}
 
-        # Prepare input (YOLO expects 3-channel)
+        # Prepare input (YOLO expects 3-channel BGR)
         if image.ndim == 2:
             img_3ch = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        else:
+        elif image.ndim == 3 and image.shape[2] == 1:
+            img_3ch = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif image.ndim == 3 and image.shape[2] == 3:
             img_3ch = image
+        else:
+            img_3ch = cv2.cvtColor(image.squeeze(), cv2.COLOR_GRAY2BGR)
 
         # Run YOLO inference
         results = self.yolo_model(img_3ch, conf=settings.YOLO_CONF_THRESHOLD, verbose=False)
@@ -291,11 +298,18 @@ class PipelineOrchestrator:
                 "segmented_roi": roi,
             }
 
-        # Preprocess for U-Net using correct validation transforms
+        # Preprocess for U-Net using correct validation transforms (expects grayscale 1-channel)
         from data.transforms import get_segmentation_val_transforms
         h, w = roi.shape[:2]
+        if roi.ndim == 3 and roi.shape[2] == 3:
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        elif roi.ndim == 3 and roi.shape[2] == 1:
+            roi_gray = roi.squeeze(-1)
+        else:
+            roi_gray = roi
+
         transform = get_segmentation_val_transforms(settings.UNET_IMG_SIZE)
-        transformed = transform(image=roi)
+        transformed = transform(image=roi_gray)
         tensor = transformed["image"].unsqueeze(0).to(self.device)
 
         # Inference
@@ -334,10 +348,12 @@ class PipelineOrchestrator:
         transform = get_classification_val_transforms(settings.CLASSIFIER_IMG_SIZE)
         
         # Ensure 3 channels for classification
-        if segmented_roi.ndim == 2:
-            segmented_roi_rgb = cv2.cvtColor(segmented_roi, cv2.COLOR_GRAY2RGB)
-        else:
+        if segmented_roi.ndim == 2 or (segmented_roi.ndim == 3 and segmented_roi.shape[2] == 1):
+            segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
+        elif segmented_roi.ndim == 3 and segmented_roi.shape[2] == 3:
             segmented_roi_rgb = segmented_roi
+        else:
+            segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
             
         transformed = transform(image=segmented_roi_rgb)
         tensor = transformed["image"].unsqueeze(0).to(self.device)
@@ -358,6 +374,8 @@ class PipelineOrchestrator:
             "efficient_prediction": "Malignant" if results["efficient_logits"].argmax(1).item() == 1 else "Benign",
             "resnet_confidence": float(torch.softmax(results["resnet_logits"], 1).max(1).values.item()),
             "efficient_confidence": float(torch.softmax(results["efficient_logits"], 1).max(1).values.item()),
+            "resnet_weight": self.ensemble.resnet_weight,
+            "efficient_weight": self.ensemble.efficient_weight,
         }
 
     def _run_explainability(self, segmented_roi: np.ndarray, original_roi: np.ndarray) -> Dict:
@@ -373,10 +391,12 @@ class PipelineOrchestrator:
             transform = get_classification_val_transforms(settings.CLASSIFIER_IMG_SIZE)
             
             # Ensure 3 channels for classification
-            if segmented_roi.ndim == 2:
-                segmented_roi_rgb = cv2.cvtColor(segmented_roi, cv2.COLOR_GRAY2RGB)
-            else:
+            if segmented_roi.ndim == 2 or (segmented_roi.ndim == 3 and segmented_roi.shape[2] == 1):
+                segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
+            elif segmented_roi.ndim == 3 and segmented_roi.shape[2] == 3:
                 segmented_roi_rgb = segmented_roi
+            else:
+                segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
                 
             transformed = transform(image=segmented_roi_rgb)
             tensor = transformed["image"].unsqueeze(0).to(self.device)

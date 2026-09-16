@@ -51,7 +51,7 @@ class ResNet50Classifier(nn.Module):
             nn.Dropout(p=dropout),
             nn.Linear(in_features, 512),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.Dropout(p=0.3),
             nn.Linear(512, num_classes),
         )
@@ -109,7 +109,7 @@ class EfficientNetV2B0Classifier(nn.Module):
             nn.Dropout(p=dropout),
             nn.Linear(in_features, 512),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.Dropout(p=0.3),
             nn.Linear(512, num_classes),
         )
@@ -148,8 +148,8 @@ class EnsembleClassifier(nn.Module):
     def __init__(
         self,
         num_classes: int = 2,
-        resnet_weight: float = 0.0,
-        efficient_weight: float = 1.0,
+        resnet_weight: float = 0.40,
+        efficient_weight: float = 0.60,
         resnet_path: Optional[str] = None,
         efficient_path: Optional[str] = None,
     ):
@@ -158,7 +158,7 @@ class EnsembleClassifier(nn.Module):
         self.resnet = ResNet50Classifier(num_classes=num_classes)
         self.efficient = EfficientNetV2B0Classifier(num_classes=num_classes)
 
-        # Ensemble weights (can be learned or set from validation)
+        # Ensemble weights: 60% EfficientNetV2 + 40% ResNet50 (as per UltraXAI design specification)
         self.resnet_weight = resnet_weight
         self.efficient_weight = efficient_weight
 
@@ -194,27 +194,28 @@ class EnsembleClassifier(nn.Module):
         resnet_logits = self.resnet(x)
         efficient_logits = self.efficient(x)
 
-        # Weighted soft voting
-        ensemble_logits = (
-            self.resnet_weight * resnet_logits
-            + self.efficient_weight * efficient_logits
-        )
+        # Probabilities from each individual classifier
+        resnet_probs = F.softmax(resnet_logits, dim=1)
+        efficient_probs = F.softmax(efficient_logits, dim=1)
 
-        # Probabilities and predictions
-        probabilities = F.softmax(ensemble_logits, dim=1)
+        # 60/40 Weighted Soft Voting on probabilities
+        probabilities = (
+            self.resnet_weight * resnet_probs
+            + self.efficient_weight * efficient_probs
+        )
         confidence, prediction = probabilities.max(dim=1)
 
         # Individual model predictions for trust scoring
         resnet_pred = resnet_logits.argmax(dim=1)
         efficient_pred = efficient_logits.argmax(dim=1)
 
-        # Compute trust scores
+        # Compute trust scores (HIGH when both models agree and conf >= 0.90)
         trust_scores = self._compute_trust_scores(
             resnet_pred, efficient_pred, confidence
         )
 
         return {
-            "logits": ensemble_logits,
+            "logits": torch.log(probabilities + 1e-7),
             "probabilities": probabilities,
             "prediction": prediction,
             "confidence": confidence,
@@ -232,10 +233,16 @@ class EnsembleClassifier(nn.Module):
         """
         Compute trust scores based on model agreement and confidence.
 
-        Trust Levels:
+        When both models have non-zero ensemble weights, agreement is checked:
             HIGH:   Both models agree AND confidence > 90%
             MEDIUM: Both models agree AND confidence 70-90%
             LOW:    Models disagree OR confidence < 70%
+
+        When only one model has non-zero weight (the other is zeroed out),
+        agreement is not required — trust is based purely on confidence:
+            HIGH:   confidence > 90%
+            MEDIUM: confidence 70-90%
+            LOW:    confidence < 70%
 
         Args:
             resnet_pred: ResNet50 predictions (B,)
@@ -246,7 +253,14 @@ class EnsembleClassifier(nn.Module):
             List of trust level strings
         """
         trust_scores = []
-        models_agree = (resnet_pred == efficient_pred)
+
+        # Only check agreement when both models actually contribute to the ensemble
+        both_active = (self.resnet_weight > 0) and (self.efficient_weight > 0)
+        if both_active:
+            models_agree = (resnet_pred == efficient_pred)
+        else:
+            # Single-model mode: no disagreement possible
+            models_agree = torch.ones(len(confidence), dtype=torch.bool)
 
         for i in range(len(confidence)):
             conf = confidence[i].item()

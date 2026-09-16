@@ -372,10 +372,11 @@ export default function DiagnosticPage() {
               </>
             )}
 
-            {/* Model Details */}
             {result.details && (
               <div className="stats-grid" style={{ marginTop: 'var(--space-xl)' }}>
-                <div className="stat-card">
+                <div className="stat-card" style={{
+                  opacity: result.details.resnet_weight === 0 ? 0.5 : 1,
+                }}>
                   <p className="stat-card-label">ResNet50</p>
                   <p className="stat-card-value" style={{
                     color: result.details.resnet_prediction === 'Malignant' ? 'var(--accent-danger)' : 'var(--accent-success)'
@@ -385,8 +386,13 @@ export default function DiagnosticPage() {
                   <p style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
                     {((result.details.resnet_confidence || 0) * 100).toFixed(1)}%
                   </p>
+                  <p style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginTop: '0.15rem' }}>
+                    Weight: {((result.details.resnet_weight ?? 0.5) * 100).toFixed(0)}%
+                  </p>
                 </div>
-                <div className="stat-card">
+                <div className="stat-card" style={{
+                  opacity: result.details.efficient_weight === 0 ? 0.5 : 1,
+                }}>
                   <p className="stat-card-label">EfficientNetV2</p>
                   <p className="stat-card-value" style={{
                     color: result.details.efficient_prediction === 'Malignant' ? 'var(--accent-danger)' : 'var(--accent-success)'
@@ -395,6 +401,9 @@ export default function DiagnosticPage() {
                   </p>
                   <p style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
                     {((result.details.efficient_confidence || 0) * 100).toFixed(1)}%
+                  </p>
+                  <p style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginTop: '0.15rem' }}>
+                    Weight: {((result.details.efficient_weight ?? 0.5) * 100).toFixed(0)}%
                   </p>
                 </div>
                 <div className="stat-card">

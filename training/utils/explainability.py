@@ -161,10 +161,12 @@ class GradCAMPlusPlus:
         )
 
         # Ensure original is 3-channel
-        if original_image.ndim == 2:
-            original_3ch = cv2.cvtColor(original_image, cv2.COLOR_GRAY2BGR)
-        else:
+        if original_image.ndim == 2 or (original_image.ndim == 3 and original_image.shape[2] == 1):
+            original_3ch = cv2.cvtColor(original_image.squeeze(), cv2.COLOR_GRAY2BGR)
+        elif original_image.ndim == 3 and original_image.shape[2] == 3:
             original_3ch = original_image.copy()
+        else:
+            original_3ch = cv2.cvtColor(original_image.squeeze(), cv2.COLOR_GRAY2BGR)
 
         # Ensure uint8
         if original_3ch.dtype != np.uint8:

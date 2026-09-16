@@ -98,6 +98,8 @@ async def diagnose_image(request: Request, file: UploadFile = File(...)):
             "efficient_prediction": results.get("efficient_prediction", "N/A"),
             "resnet_confidence": float(results.get("resnet_confidence", 0.0)),
             "efficient_confidence": float(results.get("efficient_confidence", 0.0)),
+            "resnet_weight": float(results.get("resnet_weight", 0.5)),
+            "efficient_weight": float(results.get("efficient_weight", 0.5)),
             "tumor_detected": results.get("tumor_detected", False),
             "bounding_box": results.get("bounding_box", None),
         },
