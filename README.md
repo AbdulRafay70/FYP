@@ -144,6 +144,14 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 
 **If all 5 datasets are used** (estimate): about 2,640 training images (70% of 3,774) × 6 with augmentation ≈ **15,800 training images**.
 
+> **Note:** 3,774 is the raw total of all 5 datasets **before** augmentation. It is **not** the training count.
+>
+> | | Images |
+> |---|---|
+> | Raw total, all 5 datasets (before augmentation) | 3,774 |
+> | Current training images after augmentation (BUSI only: 452 + 2,260 copies) | **2,712** |
+> | Estimated training images after augmentation if all 5 datasets are used (~2,640 × 6) | **~15,800** |
+
 ## License
 
 This project is for academic purposes (Final Year Project).
