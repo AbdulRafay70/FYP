@@ -72,6 +72,15 @@ cd training
 python -m data.augment_offline --input_dir ../datasets/BUSI_train --output_dir ../datasets/BUSI_aug --copies 5
 ```
 
+### ⚡ One-click training (local GPU)
+
+```bash
+pip install -r backend/requirements.txt albumentations scikit-learn
+python download_busi.py            # or place BUSI in datasets/BUSI
+python run_full_training.py --data_dir datasets/BUSI --copies 5 --epochs 80
+```
+Splits 70/15/15 → augments train only → trains both classifiers → saves weights to `backend/weights/`.
+
 ## 📈 Accuracy Improvements
 
 `training/train_classifiers.py` now includes:
