@@ -112,6 +112,8 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 | Training | Fixed bug where a model was never saved if its first F1 was 0 |
 | Compatibility | Updated to Albumentations 2.x API (`Affine`, `GaussNoise(std_range)`, `CoarseDropout` ranges) |
 | Pipeline | `run_full_training.py` — one command: split 70/15/15 → augment → train → save weights |
+| Data | BUSI training set expanded **452 → 2,712 images (6×)**: 305→1,830 benign, 147→882 malignant; val 97 + test 98 kept unseen |
+| Training | Uses the separate `val/` split (`--val_dirs`) so no augmented copy of a validation image is trained on |
 | Docs | `documents/UltraXAI_Update_Report.pdf` summarising all updates |
 
 ## Datasets
