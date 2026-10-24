@@ -101,6 +101,19 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
     --epochs 80 --batch_size 16 --lr 1e-4
 ```
 
+## 📝 Changelog — Latest Update
+
+| Area | Change |
+|------|--------|
+| Data | Offline augmentation script (`training/data/augment_offline.py`) — up to 6× dataset volume |
+| Data | New ultrasound augmentations: speckle noise, gamma, sharpen |
+| Training | Fixed validation leakage (val was identical to train) with stratified split |
+| Training | Label smoothing, mixup, warmup + cosine LR, AdamW, grad clipping, AMP, flip TTA |
+| Training | Fixed bug where a model was never saved if its first F1 was 0 |
+| Compatibility | Updated to Albumentations 2.x API (`Affine`, `GaussNoise(std_range)`, `CoarseDropout` ranges) |
+| Pipeline | `run_full_training.py` — one command: split 70/15/15 → augment → train → save weights |
+| Docs | `documents/UltraXAI_Update_Report.pdf` summarising all updates |
+
 ## Datasets
 
 | Dataset | Images | Download |
