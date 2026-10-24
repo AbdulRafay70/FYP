@@ -81,6 +81,19 @@ python run_full_training.py --data_dir datasets/BUSI --copies 5 --epochs 80
 ```
 Splits 70/15/15 → augments train only → trains both classifiers → saves weights to `backend/weights/`.
 
+### 📊 Dataset Volume (BUSI, actual run)
+
+| | Benign | Malignant | Total |
+|---|---|---|---|
+| Original BUSI | 437 | 210 | 647 |
+| Train split (original) | 305 | 147 | 452 |
+| + Augmented copies (5 per image) | 1,525 | 735 | 2,260 |
+| **Total training images** | **1,830** | **882** | **2,712** |
+| Validation (unseen) | 66 | 31 | 97 |
+| Test (unseen) | 66 | 32 | 98 |
+
+Training data grew **452 → 2,712 images (6×, +2,260)**. Validation and test images are never augmented or trained on.
+
 ## 📈 Accuracy Improvements
 
 `training/train_classifiers.py` now includes:
