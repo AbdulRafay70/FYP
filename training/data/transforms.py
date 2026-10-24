@@ -142,6 +142,9 @@ def get_classification_train_transforms(img_size: int = 224) -> A.Compose:
             p=0.4,
         ),
         A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.3),
+        A.RandomGamma(gamma_limit=(80, 120), p=0.3),
+        A.MultiplicativeNoise(multiplier=(0.85, 1.15), per_channel=False, p=0.2),  # speckle
+        A.Sharpen(alpha=(0.1, 0.3), lightness=(0.9, 1.1), p=0.15),
 
         # Regularization — force model to learn from partial information
         A.CoarseDropout(

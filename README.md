@@ -1,5 +1,7 @@
 # 🧬 UltraXAI — Explainable AI for Breast Cancer Detection from Ultrasound
 
+**👨‍💻 Developed by: Abdul Rafay** — the complete Final Year Project (research, models, backend, frontend and documentation) was designed and developed by Abdul Rafay.
+
 > **Final Year Project**: Automated Multi-Model Hybrid Ensemble Architecture for Breast Cancer Detection and Classification
 
 ## Overview
@@ -53,6 +55,43 @@ npm install
 npm run dev
 ```
 
+## 🔁 Data Augmentation & Dataset Expansion
+
+Breast ultrasound datasets are small, so UltraXAI uses two levels of augmentation:
+
+1. **Offline expansion** (`training/data/augment_offline.py`) — writes *N* augmented copies of every
+   image (and its mask) to disk, multiplying dataset volume (e.g. `--copies 5` → **6× data**).
+   Ultrasound-safe ops: flips, shift/scale/rotate, elastic & grid distortion, speckle
+   (multiplicative) noise, Gaussian noise/blur, brightness/contrast, gamma, CLAHE, sharpening.
+2. **Online augmentation** (`training/data/transforms.py`) — random transforms every epoch, plus
+   coarse dropout, mixup and label smoothing during training.
+
+```bash
+cd training
+# Expand ONLY the training data (never val/test, to avoid leakage)
+python -m data.augment_offline --input_dir ../datasets/BUSI_train --output_dir ../datasets/BUSI_aug --copies 5
+```
+
+## 📈 Accuracy Improvements
+
+`training/train_classifiers.py` now includes:
+
+| Technique | Benefit |
+|-----------|---------|
+| Stratified train/val split | Fixes val-equals-train leakage → honest metrics |
+| Offline-augmented data (`--aug_dirs`) | Larger, more diverse training set |
+| Label smoothing (`--label_smoothing 0.1`) | Better calibration, less over-confidence |
+| Mixup (`--mixup_alpha 0.2`) | Stronger regularisation on small data |
+| Warmup + cosine LR schedule | Stable convergence of pretrained backbones |
+| AdamW weight decay `1e-4` + grad clipping | Less overfitting, stable training |
+| Mixed precision (AMP) on GPU | Faster training, larger batches |
+| Flip test-time augmentation (TTA) | More robust validation predictions |
+
+```bash
+python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../datasets/BUSI_aug \
+    --epochs 80 --batch_size 16 --lr 1e-4
+```
+
 ## Datasets
 
 | Dataset | Images | Download |
@@ -66,3 +105,7 @@ npm run dev
 ## License
 
 This project is for academic purposes (Final Year Project).
+
+---
+
+**Developed by Abdul Rafay** — UltraXAI Final Year Project (FYP).
