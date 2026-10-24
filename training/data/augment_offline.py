@@ -33,15 +33,14 @@ def build_offline_pipeline(img_size: int) -> A.Compose:
     return A.Compose([
         A.Resize(img_size, img_size),
         A.HorizontalFlip(p=0.5),
-        A.ShiftScaleRotate(shift_limit=0.08, scale_limit=0.15, rotate_limit=20,
-                           border_mode=cv2.BORDER_CONSTANT, p=0.7),
+        A.Affine(translate_percent=(-0.08, 0.08), scale=(1-0.15, 1+0.15), rotate=(-20, 20), border_mode=cv2.BORDER_CONSTANT, p=0.7),
         A.OneOf([
             A.ElasticTransform(alpha=60, sigma=60 * 0.05, p=1.0),
             A.GridDistortion(num_steps=5, distort_limit=0.2, p=1.0),
         ], p=0.35),
         A.OneOf([
             A.MultiplicativeNoise(multiplier=(0.85, 1.15), per_channel=False, p=1.0),  # speckle
-            A.GaussNoise(var_limit=(5.0, 30.0), p=1.0),
+            A.GaussNoise(std_range=(0.01, 0.02), p=1.0),
             A.GaussianBlur(blur_limit=(3, 5), p=1.0),
         ], p=0.5),
         A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),

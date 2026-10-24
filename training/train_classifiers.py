@@ -91,9 +91,9 @@ def train_single_model(
         return 0.5 * (1 + np.cos(np.pi * progress))
     scheduler = LambdaLR(optimizer, lr_lambda)
     use_amp = device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
-    best_f1 = 0.0
+    best_f1 = -1.0
     patience_counter = 0
     save_path = os.path.join(args.output_dir, f"{model_name.lower().replace(' ', '_')}_breast.pth")
 

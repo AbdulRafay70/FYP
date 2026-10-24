@@ -14,6 +14,7 @@ Key medical augmentations:
 """
 
 import albumentations as A
+import cv2
 from albumentations.pytorch.transforms import ToTensorV2
 
 
@@ -38,13 +39,7 @@ def get_segmentation_train_transforms(img_size: int = 256) -> A.Compose:
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.3),
         A.RandomRotate90(p=0.3),
-        A.ShiftScaleRotate(
-            shift_limit=0.1,
-            scale_limit=0.15,
-            rotate_limit=15,
-            border_mode=0,  # Constant padding
-            p=0.4,
-        ),
+A.Affine(translate_percent=(-0.1, 0.1), scale=(0.85, 1.15), rotate=(-15, 15), border_mode=cv2.BORDER_CONSTANT, p=0.4),
         A.ElasticTransform(
             alpha=120,
             sigma=120 * 0.05,
@@ -58,7 +53,7 @@ def get_segmentation_train_transforms(img_size: int = 256) -> A.Compose:
 
         # Intensity transforms (image only, not mask)
         A.OneOf([
-            A.GaussNoise(var_limit=(10.0, 40.0), p=1.0),
+            A.GaussNoise(std_range=(0.012, 0.025), p=1.0),
             A.GaussianBlur(blur_limit=(3, 5), p=1.0),
         ], p=0.3),
         A.RandomBrightnessContrast(
@@ -107,13 +102,7 @@ def get_classification_train_transforms(img_size: int = 224) -> A.Compose:
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.3),
         A.RandomRotate90(p=0.3),
-        A.ShiftScaleRotate(
-            shift_limit=0.1,
-            scale_limit=0.2,
-            rotate_limit=20,
-            border_mode=0,
-            p=0.5,
-        ),
+        A.Affine(translate_percent=(-0.1, 0.1), scale=(1-0.2, 1+0.2), rotate=(-20, 20), border_mode=cv2.BORDER_CONSTANT, p=0.5),
         A.ElasticTransform(
             alpha=120,
             sigma=120 * 0.05,
@@ -126,13 +115,12 @@ def get_classification_train_transforms(img_size: int = 224) -> A.Compose:
         ),
         A.OpticalDistortion(
             distort_limit=0.05,
-            shift_limit=0.05,
             p=0.15,
         ),
 
         # Intensity transforms
         A.OneOf([
-            A.GaussNoise(var_limit=(10.0, 50.0), p=1.0),
+            A.GaussNoise(std_range=(0.012, 0.028), p=1.0),
             A.GaussianBlur(blur_limit=(3, 7), p=1.0),
             A.MedianBlur(blur_limit=5, p=1.0),
         ], p=0.3),
@@ -148,10 +136,10 @@ def get_classification_train_transforms(img_size: int = 224) -> A.Compose:
 
         # Regularization — force model to learn from partial information
         A.CoarseDropout(
-            max_holes=8,
-            max_height=img_size // 10,
-            max_width=img_size // 10,
-            fill_value=0,
+            num_holes_range=(1, 8),
+            hole_height_range=(0.05, 0.1),
+            hole_width_range=(0.05, 0.1),
+            fill=0,
             p=0.3,
         ),
 

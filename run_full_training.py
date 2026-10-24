@@ -64,7 +64,7 @@ def main():
         "--aug_dirs", str(work / "train_aug"),
         "--output_dir", str(ROOT / "backend" / "weights"),
         "--epochs", str(a.epochs), "--batch_size", str(a.batch_size), "--lr", str(a.lr),
-        "--device", "cuda",
+        "--device", os.environ.get("ULTRAXAI_DEVICE", "cuda"),
     ]
     subprocess.run(cmd, check=True)
     print(f"\nDone. Weights saved to backend/weights. Held-out test set: {work / 'test'}")
