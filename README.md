@@ -81,6 +81,19 @@ python run_full_training.py --data_dir datasets/BUSI --copies 5 --epochs 80
 ```
 Splits 70/15/15 → augments train only → trains both classifiers → saves weights to `backend/weights/`.
 
+### 📊 Dataset Volume (BUSI, actual run)
+
+| | Benign | Malignant | Total |
+|---|---|---|---|
+| Original BUSI | 437 | 210 | 647 |
+| Train split (original) | 305 | 147 | 452 |
+| + Augmented copies (5 per image) | 1,525 | 735 | 2,260 |
+| **Total training images** | **1,830** | **882** | **2,712** |
+| Validation (unseen) | 66 | 31 | 97 |
+| Test (unseen) | 66 | 32 | 98 |
+
+Training data grew **452 → 2,712 images (6×, +2,260)**. Validation and test images are never augmented or trained on.
+
 ## 📈 Accuracy Improvements
 
 `training/train_classifiers.py` now includes:
@@ -112,6 +125,8 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 | Training | Fixed bug where a model was never saved if its first F1 was 0 |
 | Compatibility | Updated to Albumentations 2.x API (`Affine`, `GaussNoise(std_range)`, `CoarseDropout` ranges) |
 | Pipeline | `run_full_training.py` — one command: split 70/15/15 → augment → train → save weights |
+| Data | BUSI training set expanded **452 → 2,712 images (6×)**: 305→1,830 benign, 147→882 malignant; val 97 + test 98 kept unseen |
+| Training | Uses the separate `val/` split (`--val_dirs`) so no augmented copy of a validation image is trained on |
 | Docs | `documents/UltraXAI_Update_Report.pdf` summarising all updates |
 
 ## Datasets
@@ -123,6 +138,11 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 | UDIAT | 163 | [Mendeley](https://data.mendeley.com/datasets/wmy84gzngw/1) |
 | STU | 756 | [Kaggle](https://www.kaggle.com/datasets/mohammedtgadallah/stu-dataset) |
 | OASBUD | 200 | [Zenodo](https://zenodo.org/records/545928) |
+| **Total (raw)** | **3,774** | |
+
+**Currently used for training:** BUSI only: 647 benign + malignant images (the 133 normal images are excluded). After augmentation the model trains on **2,712 images**.
+
+**If all 5 datasets are used** (estimate): about 2,640 training images (70% of 3,774) × 6 with augmentation ≈ **15,800 training images**.
 
 ## License
 

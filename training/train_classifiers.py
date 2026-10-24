@@ -43,6 +43,8 @@ def parse_args():
     parser.add_argument("--device", default="auto", help="Device (auto/cuda/cpu)")
     parser.add_argument("--aug_dirs", nargs="*", default=[],
                         help="Offline-augmented TRAIN-only dirs (from data/augment_offline.py)")
+    parser.add_argument("--val_dirs", nargs="*", default=[],
+                        help="Separate validation dirs (recommended with --aug_dirs to avoid leakage)")
     parser.add_argument("--val_split", type=float, default=0.2, help="Stratified validation fraction")
     parser.add_argument("--label_smoothing", type=float, default=0.1, help="Label smoothing")
     parser.add_argument("--mixup_alpha", type=float, default=0.2, help="Mixup alpha (0 disables)")
@@ -242,13 +244,20 @@ def main():
 
     # Stratified train/val split (previously val == train, which leaked data)
     labels_all = [smp["label"] for smp in train_dataset.samples]
-    train_idx, val_idx = train_test_split(
-        np.arange(len(labels_all)), test_size=args.val_split,
-        stratify=labels_all, random_state=args.seed,
-    )
+    if args.val_dirs:
+        train_idx = np.arange(len(labels_all))
+        val_set = BreastUltrasoundDataset(
+            root_dirs=args.val_dirs, mode="classification",
+            transform=val_transform, img_size=(args.img_size, args.img_size),
+        )
+    else:
+        train_idx, val_idx = train_test_split(
+            np.arange(len(labels_all)), test_size=args.val_split,
+            stratify=labels_all, random_state=args.seed,
+        )
+        val_set = Subset(val_dataset, val_idx)
     class_weights = _weights_from_labels([labels_all[i] for i in train_idx])
     train_set = Subset(train_dataset, train_idx)
-    val_set = Subset(val_dataset, val_idx)
 
     # Offline-augmented copies are added to TRAIN only
     if args.aug_dirs:

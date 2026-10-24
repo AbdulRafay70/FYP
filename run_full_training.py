@@ -62,6 +62,7 @@ def main():
         sys.executable, str(ROOT / "training" / "train_classifiers.py"),
         "--data_dirs", str(work / "train"),
         "--aug_dirs", str(work / "train_aug"),
+        "--val_dirs", str(work / "val"),
         "--output_dir", str(ROOT / "backend" / "weights"),
         "--epochs", str(a.epochs), "--batch_size", str(a.batch_size), "--lr", str(a.lr),
         "--device", os.environ.get("ULTRAXAI_DEVICE", "cuda"),
