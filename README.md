@@ -138,6 +138,11 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 | UDIAT | 163 | [Mendeley](https://data.mendeley.com/datasets/wmy84gzngw/1) |
 | STU | 756 | [Kaggle](https://www.kaggle.com/datasets/mohammedtgadallah/stu-dataset) |
 | OASBUD | 200 | [Zenodo](https://zenodo.org/records/545928) |
+| **Total (raw)** | **3,774** | |
+
+**Currently used for training:** BUSI only: 647 benign + malignant images (the 133 normal images are excluded). After augmentation the model trains on **2,712 images**.
+
+**If all 5 datasets are used** (estimate): about 2,640 training images (70% of 3,774) × 6 with augmentation ≈ **15,800 training images**.
 
 ## License
 
