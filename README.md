@@ -11,7 +11,7 @@ UltraXAI is a comprehensive AI-powered diagnostic system that detects, segments,
 ### Pipeline Flow
 ```
 Upload Ultrasound Image → Preprocessing → Detection (YOLO) → Segmentation (Attention U-Net)
-→ Classification (ResNet50 + EfficientNetV2B0 Ensemble) → Explainability (Grad-CAM++ & SHAP)
+→ Classification (ResNet50 + EfficientNetV2-S Ensemble, Benign vs Malignant) → Explainability (Grad-CAM++)
 → Clinical Dashboard with Diagnosis
 ```
 
@@ -23,7 +23,7 @@ Upload Ultrasound Image → Preprocessing → Detection (YOLO) → Segmentation 
 | **Backend** | FastAPI, WebSocket |
 | **Frontend** | React 18, Vite, Framer Motion |
 | **Preprocessing** | OpenCV, Albumentations, CLAHE |
-| **XAI** | Grad-CAM++, SHAP, Captum |
+| **XAI** | Grad-CAM++ (ResNet50, last conv block). SHAP is planned, not implemented yet |
 | **Training** | Google Colab Pro (GPU) |
 
 ## Project Structure
@@ -79,7 +79,16 @@ pip install -r backend/requirements.txt albumentations scikit-learn
 python download_busi.py            # or place BUSI in datasets/BUSI
 python run_full_training.py --data_dir datasets/BUSI --copies 5 --epochs 80
 ```
-Splits 70/15/15 → augments train only → trains both classifiers → saves weights to `backend/weights/`.
+Splits 70/15/15 → augments train only → trains both classifiers → evaluates **once** on the held-out test set.
+
+Outputs:
+- `backend/weights/`: model weights, `classifier_split_manifest.json` (exact files in each split), `classifier_run_config.json` (settings + Python/PyTorch/CUDA/GPU)
+- `evaluation/results/`: `test_metrics.json` (accuracy, precision, sensitivity, specificity, F1, ROC-AUC) and confusion matrices
+
+Segmentation (Attention U-Net) now trains only on its train split and validates only on its val split; the split is saved to `unet_split_manifest.json`:
+```bash
+cd training && python train_attention_unet.py --data_dirs ../datasets/BUSI --output_dir ../backend/weights
+```
 
 ### 📊 Dataset Volume (BUSI, actual run)
 
@@ -127,6 +136,11 @@ python train_classifiers.py --data_dirs ../datasets/BUSI_train --aug_dirs ../dat
 | Pipeline | `run_full_training.py` — one command: split 70/15/15 → augment → train → save weights |
 | Data | BUSI training set expanded **452 → 2,712 images (6×)**: 305→1,830 benign, 147→882 malignant; val 97 + test 98 kept unseen |
 | Training | Uses the separate `val/` split (`--val_dirs`) so no augmented copy of a validation image is trained on |
+| Training | **Fixed segmentation split bug**: U-Net validation used training images |
+| Evaluation | `training/evaluate_test.py`: one-time held-out test evaluation with confusion matrices |
+| Reproducibility | Split manifests and run config (settings + environment) saved automatically |
+| Docs | Corrected model name: classifier 2 is **EfficientNetV2-S** (not B0); task is **binary** Benign vs Malignant |
+| Docs | `documents/UltraXAI_Methodology_Review_Response.pdf`: answers to the methodology review |
 | Docs | `documents/UltraXAI_Update_Report.pdf` summarising all updates |
 
 ## Datasets

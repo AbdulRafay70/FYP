@@ -13,6 +13,8 @@ import os
 import sys
 import argparse
 import time
+import json
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -210,6 +212,39 @@ def _weights_from_labels(labels) -> torch.Tensor:
     return torch.tensor(counts.sum() / (len(counts) * counts), dtype=torch.float32)
 
 
+def _save_run_config(args, device, n_train, n_val):
+    """Save the exact settings and environment of this run for reproducibility."""
+    cfg = {
+        "command": " ".join(sys.argv),
+        "args": vars(args),
+        "train_samples": n_train,
+        "val_samples": n_val,
+        "models": {
+            "resnet50": "torchvision resnet50, ImageNet IMAGENET1K_V2 weights",
+            "efficientnet": "torchvision efficientnet_v2_s, ImageNet IMAGENET1K_V1 weights",
+        },
+        "optimizer": "AdamW",
+        "scheduler": "linear warmup + cosine decay (per epoch)",
+        "loss": "class-weighted CrossEntropy with label smoothing (+ mixup)",
+        "early_stopping": f"stop after {args.patience} epochs without val F1 improvement",
+        "environment": {
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "cuda": torch.version.cuda,
+            "cudnn": torch.backends.cudnn.version(),
+            "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else None,
+            "gpu_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1)
+            if device.type == "cuda" else None,
+            "platform": platform.platform(),
+        },
+        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    path = os.path.join(args.output_dir, "classifier_run_config.json")
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2, default=str)
+    print(f"[Config] Saved run configuration to {path}")
+
+
 def main():
     args = parse_args()
 
@@ -270,6 +305,7 @@ def main():
             [labels_all[i] for i in train_idx] + [smp["label"] for smp in aug_dataset.samples]
         )
     print(f"[Split] Train: {len(train_set)}  Val: {len(val_set)}")
+    _save_run_config(args, device, len(train_set), len(val_set))
 
     train_loader = DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True,

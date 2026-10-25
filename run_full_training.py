@@ -4,7 +4,8 @@ UltraXAI one-click training pipeline (run on your local GPU machine).
 Steps:
   1. Stratified split of the raw dataset into train / val / test folders
   2. Offline augmentation of the TRAIN folder only (dataset volume x (copies+1))
-  3. Train ResNet50 + EfficientNetV2 classifiers -> backend/weights/
+  3. Train ResNet50 + EfficientNetV2-S classifiers -> backend/weights/
+  4. Evaluate once on the held-out test split -> evaluation/results/
 
 Usage (from the FYP folder):
     python run_full_training.py --data_dir datasets/BUSI --copies 5 --epochs 80
@@ -45,19 +46,21 @@ def main():
     p.add_argument("--lr", type=float, default=1e-4)
     a = p.parse_args()
 
+    (ROOT / "backend" / "weights").mkdir(parents=True, exist_ok=True)
     work = ROOT / a.work_dir
     if work.exists():
         shutil.rmtree(work)
 
-    print("\n[1/3] Splitting dataset (70/15/15, stratified)...")
-    splits = create_train_val_test_split([str(ROOT / a.data_dir)])
+    print("\n[1/4] Splitting dataset (70/15/15, stratified)...")
+    splits = create_train_val_test_split(
+        [str(ROOT / a.data_dir)], output_path=str(ROOT / "backend" / "weights" / "classifier_split_manifest.json"))
     for name in ("train", "val", "test"):
         copy_split(splits[name], work / name)
 
-    print(f"\n[2/3] Augmenting TRAIN split with {a.copies} copies per image...")
+    print(f"\n[2/4] Augmenting TRAIN split with {a.copies} copies per image...")
     augment_dataset(str(work / "train"), str(work / "train_aug"), a.copies, 256, keep_original=False)
 
-    print("\n[3/3] Training classifiers on GPU...")
+    print("\n[3/4] Training classifiers on GPU...")
     cmd = [
         sys.executable, str(ROOT / "training" / "train_classifiers.py"),
         "--data_dirs", str(work / "train"),
@@ -68,6 +71,14 @@ def main():
         "--device", os.environ.get("ULTRAXAI_DEVICE", "cuda"),
     ]
     subprocess.run(cmd, check=True)
+
+    print("\n[4/4] Evaluating ONCE on the held-out test set...")
+    subprocess.run([
+        sys.executable, str(ROOT / "training" / "evaluate_test.py"),
+        "--test_dir", str(work / "test"),
+        "--weights_dir", str(ROOT / "backend" / "weights"),
+        "--output_dir", str(ROOT / "evaluation" / "results"),
+    ], check=True)
     print(f"\nDone. Weights saved to backend/weights. Held-out test set: {work / 'test'}")
 
 

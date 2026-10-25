@@ -62,6 +62,7 @@ class BreastUltrasoundDataset(Dataset):
         transform: Optional[Callable] = None,
         img_size: Tuple[int, int] = (224, 224),
         include_normal: bool = False,
+        samples: Optional[List[Dict]] = None,
     ):
         """
         Args:
@@ -70,6 +71,8 @@ class BreastUltrasoundDataset(Dataset):
             transform: Albumentations transform pipeline
             img_size: Target image size (H, W)
             include_normal: Whether to include normal (non-tumor) cases
+            samples: Optional explicit sample list (e.g. one partition from
+                data.split) — when given, root_dirs are not scanned
         """
         assert mode in ("classification", "segmentation"), \
             f"Mode must be 'classification' or 'segmentation', got '{mode}'"
@@ -80,7 +83,13 @@ class BreastUltrasoundDataset(Dataset):
 
         # Collect all image paths and labels
         self.samples: List[Dict] = []
-        self._load_datasets(root_dirs, include_normal)
+        if samples is not None:
+            self.samples = [
+                sm for sm in samples
+                if mode == "classification" or sm.get("mask_path")
+            ]
+        else:
+            self._load_datasets(root_dirs, include_normal)
 
         print(
             f"[Dataset] Loaded {len(self.samples)} samples "

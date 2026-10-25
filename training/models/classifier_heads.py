@@ -77,7 +77,10 @@ class ResNet50Classifier(nn.Module):
 
 class EfficientNetV2B0Classifier(nn.Module):
     """
-    EfficientNetV2-B0 backbone with custom classification head.
+    EfficientNetV2-S backbone with custom classification head.
+
+    Note: the class name is historical — the backbone is torchvision's
+    efficientnet_v2_s (ImageNet IMAGENET1K_V1), not the B0 variant.
 
     Architecture:
         EfficientNetV2-B0 (ImageNet pretrained) → AdaptiveAvgPool2d

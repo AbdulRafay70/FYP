@@ -150,14 +150,19 @@ def main():
     print("=" * 70 + "\n")
 
     # Create data splits
-    splits = create_train_val_test_split(args.data_dirs)
+    os.makedirs(args.output_dir, exist_ok=True)
+    manifest_path = os.path.join(args.output_dir, "unet_split_manifest.json")
+    splits = create_train_val_test_split(args.data_dirs, output_path=manifest_path)
 
     # Create datasets
     train_transform = get_segmentation_train_transforms(args.img_size)
     val_transform = get_segmentation_val_transforms(args.img_size)
 
+    # Each dataset uses ONLY its own partition; the test partition is never
+    # loaded here and is kept for final evaluation (see unet_split_manifest.json)
     train_dataset = BreastUltrasoundDataset(
         root_dirs=args.data_dirs,
+        samples=splits["train"],
         mode="segmentation",
         transform=train_transform,
         img_size=(args.img_size, args.img_size),
@@ -165,6 +170,7 @@ def main():
 
     val_dataset = BreastUltrasoundDataset(
         root_dirs=args.data_dirs,
+        samples=splits["val"],
         mode="segmentation",
         transform=val_transform,
         img_size=(args.img_size, args.img_size),
