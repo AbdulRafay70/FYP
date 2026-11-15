@@ -1,4 +1,14 @@
 """
+LEGACY EXPERIMENT — not part of the final methodology.
+
+This earlier script trained both classifiers on BUSI lesion crops PLUS whole
+Normal images (labelled 0), on CPU, with hard-coded Windows paths. The binary
+(250 images) and 3-class confusion-matrix figures in the repository root are
+believed to come from this line of experiments; they are NOT from the final
+70/15/15 split and must not be reported as final test results.
+The final pipeline is run_full_training.py -> evaluation/evaluate_test_set.py.
+"""
+"""
 Train both ResNet50 and EfficientNetV2 on all Benign, Malignant, and Normal images.
 Normal images are labeled as Class 0 (Benign / Non-cancerous).
 """

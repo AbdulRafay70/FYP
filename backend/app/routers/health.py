@@ -20,7 +20,11 @@ async def model_status(request: Request):
     if pipeline is None:
         return JSONResponse(content={"status": "not_initialized", "models": {}})
 
+    models = pipeline.get_model_status()
+    loaded = sum(models.values())
+    status = "ready" if loaded == len(models) else ("degraded" if loaded else "no_models_loaded")
     return JSONResponse(content={
-        "status": "ready",
-        "models": pipeline.get_model_status(),
+        "status": status,
+        "models": models,
+        "missing": [name for name, ok in models.items() if not ok],
     })

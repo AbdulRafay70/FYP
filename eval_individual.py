@@ -1,3 +1,10 @@
+"""
+DEPRECATED — do not use for thesis results.
+
+This script evaluates on the WHOLE BUSI folder (train + val + test images), so
+its numbers are inflated by data leakage. Use evaluation/evaluate_test_set.py,
+which evaluates only the held-out test partition.
+"""
 import os
 import sys
 import numpy as np

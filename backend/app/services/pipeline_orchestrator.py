@@ -3,15 +3,15 @@ Pipeline Orchestrator — Orchestrates the 4-Phase AI Diagnostic Pipeline.
 
 Phase 1: Detection (YOLOv8-Seg) — Locate suspicious regions
 Phase 2: Segmentation (Attention U-Net) — Precise tumor masking
-Phase 3: Classification (ResNet50 + EfficientNetV2B0) — Benign vs Malignant
-Phase 4: Explainability (Grad-CAM++) — Visual explanation heatmaps
+Phase 3: Classification (ResNet50 + EfficientNetV2-S, weighted soft voting 0.40/0.60) — Benign vs Malignant
+Phase 4: Explainability (ensemble Grad-CAM++) — Visual explanation heatmaps
 """
 
 import os
 import time
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import cv2
 import numpy as np
@@ -23,7 +23,7 @@ if training_path not in sys.path:
     sys.path.insert(0, training_path)
 
 from app.config import settings
-from app.preprocessing.image_pipeline import preprocess_image, crop_roi_from_bbox
+from data.roi import pad_box, mask_to_box
 
 
 class PipelineOrchestrator:
@@ -106,19 +106,30 @@ class PipelineOrchestrator:
             self.ensemble = None
 
     def get_model_status(self) -> Dict[str, bool]:
-        """Return the loading status of each model."""
-        return self.models_loaded
+        """Return the loading status of each model (True only if its checkpoint loaded)."""
+        return dict(self.models_loaded)
 
-    def run_full_pipeline(self, image: np.ndarray) -> Dict:
+    def run_full_pipeline(self, image: np.ndarray, progress: Optional[Callable] = None) -> Dict:
         """
         Run the complete 4-phase diagnostic pipeline.
 
+        Inference preprocessing (identical to the validation transforms used in
+        training): grayscale decode → model-specific resize (YOLO 640, U-Net 256,
+        classifiers 224, bilinear) → mean/std normalisation. CLAHE / denoising
+        from app.preprocessing.image_pipeline are NOT applied, because the
+        models were not trained on CLAHE-enhanced or denoised images.
+
         Args:
             image: Input grayscale ultrasound image (H, W)
+            progress: optional callback(phase:int, name:str, status:str, time_ms:float|None)
 
         Returns:
             Dictionary with all results, visualizations, and metadata
         """
+        def report(phase, name, status, time_ms=None):
+            if progress is not None:
+                progress(phase, name, status, time_ms)
+
         results = {
             "phases": {},
             "tumor_detected": False,
@@ -128,12 +139,14 @@ class PipelineOrchestrator:
         }
 
         # ---- Phase 1: Detection ----
-        phase1_start = time.time()
+        report(1, "Detection", "processing")
+        t0 = time.time()
         detection_result = self._run_detection(image)
         results["phases"]["detection"] = {
-            "status": "complete" if detection_result["detected"] else "no_tumor",
-            "time_ms": round((time.time() - phase1_start) * 1000, 2),
+            "status": "complete" if detection_result["detected"] else "no_detection_using_full_image",
+            "time_ms": round((time.time() - t0) * 1000, 2),
         }
+        report(1, "Detection", "complete", results["phases"]["detection"]["time_ms"])
 
         if detection_result["detected"]:
             results["tumor_detected"] = True
@@ -141,83 +154,83 @@ class PipelineOrchestrator:
             results["detection_overlay"] = detection_result["overlay"]
             roi = detection_result["roi"]
         else:
-            # No tumor detected — still classify the full image
             roi = image
-            results["phases"]["detection"]["status"] = "no_tumor_using_full_image"
 
         # ---- Phase 2: Segmentation ----
-        phase2_start = time.time()
-        seg_result = self._run_segmentation(roi)
+        report(2, "Segmentation", "processing")
+        t0 = time.time()
+        # U-Net was trained on whole images (256x256), so it is run on the whole image
+        seg_result = self._run_segmentation(image)
         results["phases"]["segmentation"] = {
-            "status": "complete",
-            "time_ms": round((time.time() - phase2_start) * 1000, 2),
+            "status": "complete" if self.unet_model is not None else "skipped_model_not_loaded",
+            "time_ms": round((time.time() - t0) * 1000, 2),
         }
+        report(2, "Segmentation", "complete", results["phases"]["segmentation"]["time_ms"])
         results["segmentation_mask"] = seg_result["mask_visualization"]
-        segmented_roi = seg_result["segmented_roi"]
-        
-        # Fallback: If YOLO missed the tumor but U-Net segmented one, crop using U-Net mask coordinates
-        if not detection_result["detected"] and seg_result["mask"] is not None:
-            mask_binary = (seg_result["mask"] > 0.5).astype(np.uint8)
-            y_indices, x_indices = np.where(mask_binary > 0)
-            if len(y_indices) > 50:  # Minimum pixel threshold to avoid noise
-                y1, y2 = y_indices.min(), y_indices.max()
-                x1, x2 = x_indices.min(), x_indices.max()
-                
-                # Add 15% padding
-                h_img, w_img = image.shape[:2]
-                pad_x = int((x2 - x1) * 0.15)
-                pad_y = int((y2 - y1) * 0.15)
-                x1_pad = max(0, x1 - pad_x)
-                y1_pad = max(0, y1 - pad_y)
-                x2_pad = min(w_img, x2 + pad_x)
-                y2_pad = min(h_img, y2 + pad_y)
-                
-                # Crop the ROI using the U-Net mask boundary box
-                segmented_roi = image[y1_pad:y2_pad, x1_pad:x2_pad]
-                results["tumor_detected"] = True
-                results["bounding_box"] = [int(x1_pad), int(y1_pad), int(x2_pad), int(y2_pad)]
-                
-                # Re-create detection overlay using U-Net bounding box
-                if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
-                    img_3ch = cv2.cvtColor(image.squeeze(), cv2.COLOR_GRAY2BGR)
-                else:
-                    img_3ch = image.copy()
-                cv2.rectangle(img_3ch, (x1_pad, y1_pad), (x2_pad, y2_pad), (0, 255, 0), 2)
-                cv2.putText(img_3ch, "Tumor Detected (U-Net Fallback)", (x1_pad, y1_pad - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                results["detection_overlay"] = img_3ch
+        segmented_roi = roi  # classifiers receive the unmasked ROI crop
+
+        mask_pixels = 0
+        if self.unet_model is not None and seg_result["mask"] is not None:
+            mask_pixels = int((seg_result["mask"] > 0.5).sum())
+
+        # Fallback: YOLO found nothing but U-Net segmented a lesion → crop the ROI from the mask
+        if not detection_result["detected"] and mask_pixels > 50:
+            box = pad_box(mask_to_box(seg_result["mask"]), image.shape)
+            x1, y1, x2, y2 = box
+            segmented_roi = image[y1:y2, x1:x2]
+            results["tumor_detected"] = True
+            results["bounding_box"] = [int(v) for v in box]
+            img_3ch = cv2.cvtColor(image.squeeze(), cv2.COLOR_GRAY2BGR) if image.ndim == 2 or image.shape[-1] == 1 else image.copy()
+            cv2.rectangle(img_3ch, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(img_3ch, "Lesion (U-Net fallback)", (x1, max(0, y1 - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            results["detection_overlay"] = img_3ch
 
         # ---- Phase 3: Classification ----
-        phase3_start = time.time()
-        
-        # Safeguard: If the segmentation mask is empty (no tumor pixels found), bypass classifiers
-        if seg_result["mask"] is not None and seg_result["mask"].sum() < 10:
+        # The classifiers are binary (Benign vs Malignant) and were trained only on
+        # lesion ROIs — never on Normal images. If neither YOLO nor U-Net finds a
+        # lesion, the classifier is not run and the result is reported as
+        # "No lesion detected" (inconclusive), NOT as a confident Benign diagnosis.
+        no_lesion = (
+            not results["tumor_detected"]
+            and self.unet_model is not None
+            and mask_pixels <= 50
+        )
+        report(3, "Classification", "processing")
+        t0 = time.time()
+        if no_lesion:
             cls_result = {
-                "prediction": "Benign",
-                "confidence": 1.0,
-                "trust_score": "HIGH",
-                "resnet_prediction": "Benign",
-                "efficient_prediction": "Benign",
-                "resnet_confidence": 1.0,
-                "efficient_confidence": 1.0,
-                "message": "No tumor pixels segmented. Diagnosed as Normal / Benign."
+                "prediction": "No lesion detected",
+                "confidence": 0.0,
+                "trust_score": "N/A",
+                "message": ("Neither the detector nor the segmentation model found a lesion. "
+                            "The Benign/Malignant classifier was not applied. This is not a "
+                            "diagnosis of normal tissue; radiologist review is required."),
             }
         else:
             cls_result = self._run_classification(segmented_roi)
-            
         results["phases"]["classification"] = {
-            "status": "complete",
-            "time_ms": round((time.time() - phase3_start) * 1000, 2),
+            "status": "skipped_no_lesion" if no_lesion else "complete",
+            "time_ms": round((time.time() - t0) * 1000, 2),
         }
+        report(3, "Classification", "complete", results["phases"]["classification"]["time_ms"])
         results.update(cls_result)
 
         # ---- Phase 4: Explainability ----
-        phase4_start = time.time()
-        xai_result = self._run_explainability(segmented_roi, roi)
+        report(4, "Explainability", "processing")
+        t0 = time.time()
+        if no_lesion or "prediction_index" not in cls_result:
+            xai_result = {"gradcam_heatmap": None, "gradcam_overlay": None, "explained_model": None}
+            xai_status = "skipped"
+        else:
+            xai_result = self._run_explainability(segmented_roi, segmented_roi,
+                                                  target_class=cls_result["prediction_index"])
+            xai_status = "complete" if xai_result["gradcam_overlay"] is not None else "failed"
         results["phases"]["explainability"] = {
-            "status": "complete",
-            "time_ms": round((time.time() - phase4_start) * 1000, 2),
+            "status": xai_status,
+            "time_ms": round((time.time() - t0) * 1000, 2),
         }
+        report(4, "Explainability", xai_status, results["phases"]["explainability"]["time_ms"])
         results.update(xai_result)
 
         return results
@@ -263,14 +276,8 @@ class PipelineOrchestrator:
         bbox = boxes.xyxy[best_idx].cpu().numpy().astype(int)
         x1, y1, x2, y2 = bbox
 
-        # Add padding (15%)
-        h, w = image.shape[:2]
-        pad_x = int((x2 - x1) * 0.15)
-        pad_y = int((y2 - y1) * 0.15)
-        x1 = max(0, x1 - pad_x)
-        y1 = max(0, y1 - pad_y)
-        x2 = min(w, x2 + pad_x)
-        y2 = min(h, y2 + pad_y)
+        # Add padding (15%) — same geometry as the classifier training crops
+        x1, y1, x2, y2 = pad_box((x1, y1, x2, y2), image.shape)
 
         # Crop ROI
         roi = image[y1:y2, x1:x2]
@@ -325,7 +332,10 @@ class PipelineOrchestrator:
         mask_vis = (mask_binary * 255).astype(np.uint8)
         mask_colored = cv2.applyColorMap(mask_vis, cv2.COLORMAP_OCEAN)
 
-        # Apply mask to ROI (we pass the raw cropped ROI to classifiers to match training distribution)
+        # The mask is NOT multiplied into the image: the classifiers were trained on
+        # unmasked ROI crops (GT-mask box + 15% padding), so they receive the raw ROI.
+        # The mask is used to (a) re-locate the ROI when YOLO finds nothing and
+        # (b) decide "no lesion found", and is returned for display.
         segmented = roi
 
         return {
@@ -347,27 +357,22 @@ class PipelineOrchestrator:
         from data.transforms import get_classification_val_transforms
         transform = get_classification_val_transforms(settings.CLASSIFIER_IMG_SIZE)
         
-        # Ensure 3 channels for classification
-        if segmented_roi.ndim == 2 or (segmented_roi.ndim == 3 and segmented_roi.shape[2] == 1):
-            segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
-        elif segmented_roi.ndim == 3 and segmented_roi.shape[2] == 3:
-            segmented_roi_rgb = segmented_roi
-        else:
-            segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
-            
-        transformed = transform(image=segmented_roi_rgb)
+        # Ensure 3 channels for classification (same GRAY2RGB as training)
+        transformed = transform(image=self._to_rgb(segmented_roi))
         tensor = transformed["image"].unsqueeze(0).to(self.device)
 
         # Inference
         with torch.no_grad():
             results = self.ensemble(tensor)
 
-        pred_label = "Malignant" if results["prediction"].item() == 1 else "Benign"
+        pred_idx = int(results["prediction"].item())
+        pred_label = "Malignant" if pred_idx == 1 else "Benign"
         confidence = results["confidence"].item()
         trust = results["trust_score"][0]
 
         return {
             "prediction": pred_label,
+            "prediction_index": pred_idx,
             "confidence": confidence,
             "trust_score": trust,
             "resnet_prediction": "Malignant" if results["resnet_logits"].argmax(1).item() == 1 else "Benign",
@@ -378,42 +383,46 @@ class PipelineOrchestrator:
             "efficient_weight": self.ensemble.efficient_weight,
         }
 
-    def _run_explainability(self, segmented_roi: np.ndarray, original_roi: np.ndarray) -> Dict:
-        """Phase 4: Generate Grad-CAM++ heatmaps."""
+    def _run_explainability(self, segmented_roi: np.ndarray, original_roi: np.ndarray,
+                            target_class: Optional[int] = None) -> Dict:
+        """
+        Phase 4: Grad-CAM++ explanation of the ENSEMBLE prediction.
+
+        Grad-CAM++ maps are computed for ResNet50 (layer4[-1]) and EfficientNetV2-S
+        (features[-1]) for the ensemble's predicted class and fused with the
+        ensemble weights (0.40 / 0.60).
+        """
         if self.ensemble is None:
-            return {"gradcam_heatmap": None, "gradcam_overlay": None}
+            return {"gradcam_heatmap": None, "gradcam_overlay": None, "explained_model": None}
 
         try:
-            from utils.explainability import GradCAMPlusPlus
-
-            # Prepare input tensor using correct validation transforms
+            from utils.explainability import generate_gradcam_for_ensemble
             from data.transforms import get_classification_val_transforms
+
             transform = get_classification_val_transforms(settings.CLASSIFIER_IMG_SIZE)
-            
-            # Ensure 3 channels for classification
-            if segmented_roi.ndim == 2 or (segmented_roi.ndim == 3 and segmented_roi.shape[2] == 1):
-                segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
-            elif segmented_roi.ndim == 3 and segmented_roi.shape[2] == 3:
-                segmented_roi_rgb = segmented_roi
-            else:
-                segmented_roi_rgb = cv2.cvtColor(segmented_roi.squeeze(), cv2.COLOR_GRAY2RGB)
-                
-            transformed = transform(image=segmented_roi_rgb)
-            tensor = transformed["image"].unsqueeze(0).to(self.device)
+            tensor = transform(image=self._to_rgb(segmented_roi))["image"].unsqueeze(0).to(self.device)
 
-            # Generate Grad-CAM for ResNet50
-            gradcam = GradCAMPlusPlus(
-                self.ensemble.resnet,
-                self.ensemble.resnet.get_last_conv_layer(),
+            maps = generate_gradcam_for_ensemble(
+                self.ensemble.resnet, self.ensemble.efficient, tensor, original_roi,
+                target_class=target_class,
+                resnet_weight=self.ensemble.resnet_weight,
+                efficient_weight=self.ensemble.efficient_weight,
             )
-            heatmap = gradcam.generate(tensor)
-            overlay = GradCAMPlusPlus.overlay_heatmap(heatmap, original_roi)
-
             return {
-                "gradcam_heatmap": (heatmap * 255).astype(np.uint8),
-                "gradcam_overlay": overlay,
+                "gradcam_heatmap": (maps["combined_heatmap"] * 255).astype(np.uint8),
+                "gradcam_overlay": maps["combined_overlay"],
+                "explained_model": (
+                    f"Ensemble Grad-CAM++ ({self.ensemble.resnet_weight:.2f} x ResNet50 layer4 + "
+                    f"{self.ensemble.efficient_weight:.2f} x EfficientNetV2-S features[-1])"
+                ),
             }
 
         except Exception as e:
             print(f"  ⚠ Grad-CAM generation failed: {e}")
-            return {"gradcam_heatmap": None, "gradcam_overlay": None}
+            return {"gradcam_heatmap": None, "gradcam_overlay": None, "explained_model": None}
+
+    @staticmethod
+    def _to_rgb(img: np.ndarray) -> np.ndarray:
+        if img.ndim == 3 and img.shape[2] == 3:
+            return img
+        return cv2.cvtColor(img.squeeze(), cv2.COLOR_GRAY2RGB)

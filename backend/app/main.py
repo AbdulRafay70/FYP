@@ -30,7 +30,12 @@ async def lifespan(app: FastAPI):
         device=settings.DEVICE,
     )
 
-    print("  ✓ All models loaded successfully")
+    status = app.state.pipeline.get_model_status()
+    missing = [name for name, ok in status.items() if not ok]
+    if missing:
+        print(f"  ⚠ Models NOT loaded (missing/failed checkpoints): {', '.join(missing)}")
+    else:
+        print("  ✓ All models loaded successfully")
     print(f"  ✓ Device: {settings.DEVICE}")
     print(f"  ✓ Server ready at http://localhost:{settings.PORT}")
     print("=" * 60 + "\n")

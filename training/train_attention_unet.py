@@ -4,9 +4,13 @@ Attention U-Net Training Script for Breast Ultrasound Segmentation.
 Trains the Attention U-Net model on paired ultrasound image + mask data.
 Uses combined Dice + BCE loss, early stopping, and comprehensive logging.
 
-Usage:
-    python train_attention_unet.py --data_dirs datasets/BUSI datasets/BUS_BRA \
-                                   --epochs 150 --batch_size 8 --lr 1e-4
+Usage (prepared split folders, as created by run_full_training.py):
+    python train_attention_unet.py --train_dirs datasets/prepared/train datasets/prepared/train_aug \
+                                   --val_dirs datasets/prepared/val --epochs 150
+
+Usage (raw dataset; a stratified 70/15/15 split is made and ONLY its train/val
+partitions are used -- the test partition is never seen during training):
+    python train_attention_unet.py --data_dirs datasets/BUSI --epochs 150
 """
 
 import os
@@ -29,11 +33,16 @@ from data.dataset import BreastUltrasoundDataset
 from data.transforms import get_segmentation_train_transforms, get_segmentation_val_transforms
 from data.split import create_train_val_test_split
 from utils.metrics import dice_coefficient, iou_score, compute_segmentation_metrics
+from utils.run_logging import save_run_config, EpochLogger
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Attention U-Net")
-    parser.add_argument("--data_dirs", nargs="+", required=True, help="Dataset directories")
+    parser.add_argument("--data_dirs", nargs="+", default=[],
+                        help="Raw dataset dirs (split 70/15/15 internally)")
+    parser.add_argument("--train_dirs", nargs="+", default=[], help="Prepared TRAIN dirs (+ train_aug)")
+    parser.add_argument("--val_dirs", nargs="+", default=[], help="Prepared VAL dirs")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", default="weights", help="Output directory for weights")
     parser.add_argument("--epochs", type=int, default=150, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
@@ -149,26 +158,30 @@ def main():
     print(f"  Patience:   {args.patience}")
     print("=" * 70 + "\n")
 
-    # Create data splits
-    splits = create_train_val_test_split(args.data_dirs)
+    torch.manual_seed(args.seed)
 
-    # Create datasets
     train_transform = get_segmentation_train_transforms(args.img_size)
     val_transform = get_segmentation_val_transforms(args.img_size)
+    size = (args.img_size, args.img_size)
 
-    train_dataset = BreastUltrasoundDataset(
-        root_dirs=args.data_dirs,
-        mode="segmentation",
-        transform=train_transform,
-        img_size=(args.img_size, args.img_size),
-    )
+    if args.train_dirs and args.val_dirs:
+        train_dataset = BreastUltrasoundDataset(args.train_dirs, "segmentation", train_transform, size)
+        val_dataset = BreastUltrasoundDataset(args.val_dirs, "segmentation", val_transform, size)
+    elif args.data_dirs:
+        # Use the split partitions (previously train and val were both the full dataset)
+        splits = create_train_val_test_split(args.data_dirs, random_state=args.seed)
+        train_paths = {s["image_path"] for s in splits["train"]}
+        val_paths = {s["image_path"] for s in splits["val"]}
+        train_dataset = BreastUltrasoundDataset(args.data_dirs, "segmentation", train_transform, size)
+        val_dataset = BreastUltrasoundDataset(args.data_dirs, "segmentation", val_transform, size)
+        train_dataset.samples = [s for s in train_dataset.samples if s["image_path"] in train_paths]
+        val_dataset.samples = [s for s in val_dataset.samples if s["image_path"] in val_paths]
+    else:
+        sys.exit("Provide --train_dirs and --val_dirs, or --data_dirs.")
 
-    val_dataset = BreastUltrasoundDataset(
-        root_dirs=args.data_dirs,
-        mode="segmentation",
-        transform=val_transform,
-        img_size=(args.img_size, args.img_size),
-    )
+    assert not ({s["image_path"] for s in train_dataset.samples}
+                & {s["image_path"] for s in val_dataset.samples}), "train/val overlap"
+    print(f"[Split] Train: {len(train_dataset)}  Val: {len(val_dataset)}")
 
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
@@ -193,6 +206,13 @@ def main():
     patience_counter = 0
     os.makedirs(args.output_dir, exist_ok=True)
     best_path = os.path.join(args.output_dir, "attention_unet_breast.pth")
+    save_run_config(args.output_dir, "attention_unet", {
+        **vars(args), "optimizer": "Adam", "weight_decay": 1e-5,
+        "scheduler": "CosineAnnealingWarmRestarts(T_0=10, T_mult=2)",
+        "loss": "0.5*Dice + 0.5*BCE", "selection": "best val Dice",
+        "n_train": len(train_dataset), "n_val": len(val_dataset),
+    })
+    logger = EpochLogger(args.output_dir, "attention_unet")
 
     print("Starting training...\n")
 
@@ -217,6 +237,11 @@ def main():
             f"| Val Loss: {val_metrics['loss']:.4f} Dice: {val_metrics['dice']:.4f} IoU: {val_metrics['iou']:.4f} "
             f"| {elapsed:.1f}s"
         )
+
+        logger.log(epoch=epoch, train_loss=train_metrics["loss"], train_dice=train_metrics["dice"],
+                   val_loss=val_metrics["loss"], val_dice=val_metrics["dice"],
+                   val_iou=val_metrics["iou"], lr=optimizer.param_groups[0]["lr"],
+                   seconds=elapsed)
 
         # Save best model
         if val_metrics["dice"] > best_dice:

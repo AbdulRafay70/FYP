@@ -1,12 +1,17 @@
 """
 Classifier Ensemble Training Script.
 
-Trains ResNet50 and EfficientNetV2-B0 classifiers on cropped tumor ROIs
-for Benign vs Malignant classification.
+Trains ResNet50 and EfficientNetV2-S classifiers on lesion ROI crops
+(ground-truth mask bounding box + 15% padding, the same crop geometry the
+backend uses at inference) for binary Benign (0) vs Malignant (1) diagnosis.
 
-Usage:
-    python train_classifiers.py --data_dirs datasets/BUSI datasets/BUS_BRA \
-                                --epochs 80 --batch_size 16 --lr 1e-4
+Usage (prepared split folders -- recommended, see run_full_training.py):
+    python train_classifiers.py --data_dirs datasets/prepared/train \
+        --aug_dirs datasets/prepared/train_aug --val_dirs datasets/prepared/val
+
+Usage (raw dataset; a stratified 70/15/15 split is made and only its train/val
+partitions are used -- the test partition is never trained or validated on):
+    python train_classifiers.py --data_dirs datasets/BUSI
 """
 
 import os
@@ -18,14 +23,15 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset, ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from models.classifier_heads import ResNet50Classifier, EfficientNetV2B0Classifier
+from models.classifier_heads import ResNet50Classifier, EfficientNetV2SClassifier
+from data.split import create_train_val_test_split
+from utils.run_logging import save_run_config, EpochLogger
 from data.dataset import BreastUltrasoundDataset
 from data.transforms import get_classification_train_transforms, get_classification_val_transforms
 from utils.metrics import compute_classification_metrics, print_classification_report
@@ -45,7 +51,9 @@ def parse_args():
                         help="Offline-augmented TRAIN-only dirs (from data/augment_offline.py)")
     parser.add_argument("--val_dirs", nargs="*", default=[],
                         help="Separate validation dirs (recommended with --aug_dirs to avoid leakage)")
-    parser.add_argument("--val_split", type=float, default=0.2, help="Stratified validation fraction")
+    parser.add_argument("--full_image", action="store_true",
+                        help="Train on whole images instead of lesion ROI crops (not recommended: "
+                             "the backend classifies ROI crops)")
     parser.add_argument("--label_smoothing", type=float, default=0.1, help="Label smoothing")
     parser.add_argument("--mixup_alpha", type=float, default=0.2, help="Mixup alpha (0 disables)")
     parser.add_argument("--warmup_epochs", type=int, default=3, help="Linear LR warmup epochs")
@@ -98,6 +106,16 @@ def train_single_model(
     best_f1 = -1.0
     patience_counter = 0
     save_path = os.path.join(args.output_dir, f"{model_name.lower().replace(' ', '_')}_breast.pth")
+    log_name = model_name.lower().replace(" ", "_")
+    save_run_config(args.output_dir, log_name, {
+        **vars(args), "architecture": model.__class__.__name__,
+        "optimizer": "AdamW", "scheduler": f"linear warmup ({args.warmup_epochs} ep) + cosine",
+        "loss": f"weighted CrossEntropy (label_smoothing={args.label_smoothing})",
+        "class_weights": class_weights.tolist(), "grad_clip": 1.0,
+        "amp": device.type == "cuda", "selection": "best val F1 (Malignant = positive)",
+        "n_train": len(train_loader.dataset), "n_val": len(val_loader.dataset),
+    })
+    logger = EpochLogger(args.output_dir, log_name)
 
     for epoch in range(1, args.epochs + 1):
         t_start = time.time()
@@ -184,6 +202,12 @@ def train_single_model(
             f"| {elapsed:.1f}s"
         )
 
+        logger.log(epoch=epoch, train_loss=train_loss / num_train_batches, train_acc=train_acc,
+                   val_loss=val_loss / num_val_batches, val_acc=metrics["accuracy"],
+                   val_f1=metrics["f1_score"], val_sensitivity=metrics["sensitivity"],
+                   val_specificity=metrics["specificity"], val_auc=metrics.get("auc_roc"),
+                   lr=optimizer.param_groups[0]["lr"], seconds=elapsed)
+
         # Save best
         if metrics["f1_score"] > best_f1:
             best_f1 = metrics["f1_score"]
@@ -228,46 +252,40 @@ def main():
     train_transform = get_classification_train_transforms(args.img_size)
     val_transform = get_classification_val_transforms(args.img_size)
 
-    # Datasets
+    # Datasets (lesion ROI crops unless --full_image)
+    size = (args.img_size, args.img_size)
+    roi = not args.full_image
     train_dataset = BreastUltrasoundDataset(
-        root_dirs=args.data_dirs,
-        mode="classification",
-        transform=train_transform,
-        img_size=(args.img_size, args.img_size),
-    )
-    val_dataset = BreastUltrasoundDataset(
-        root_dirs=args.data_dirs,
-        mode="classification",
-        transform=val_transform,
-        img_size=(args.img_size, args.img_size),
-    )
+        args.data_dirs, "classification", train_transform, size, roi_crop=roi)
 
-    # Stratified train/val split (previously val == train, which leaked data)
-    labels_all = [smp["label"] for smp in train_dataset.samples]
     if args.val_dirs:
-        train_idx = np.arange(len(labels_all))
         val_set = BreastUltrasoundDataset(
-            root_dirs=args.val_dirs, mode="classification",
-            transform=val_transform, img_size=(args.img_size, args.img_size),
-        )
+            args.val_dirs, "classification", val_transform, size, roi_crop=roi)
+        train_set = train_dataset
     else:
-        train_idx, val_idx = train_test_split(
-            np.arange(len(labels_all)), test_size=args.val_split,
-            stratify=labels_all, random_state=args.seed,
-        )
-        val_set = Subset(val_dataset, val_idx)
-    class_weights = _weights_from_labels([labels_all[i] for i in train_idx])
-    train_set = Subset(train_dataset, train_idx)
+        # No separate val folder: make the standard 70/15/15 split and use only
+        # train/val -- the test partition is held out (never trained on).
+        splits = create_train_val_test_split(args.data_dirs, random_state=args.seed)
+        train_paths = {s["image_path"] for s in splits["train"]}
+        val_paths = {s["image_path"] for s in splits["val"]}
+        val_dataset = BreastUltrasoundDataset(
+            args.data_dirs, "classification", val_transform, size, roi_crop=roi)
+        train_dataset.samples = [s for s in train_dataset.samples if s["image_path"] in train_paths]
+        val_dataset.samples = [s for s in val_dataset.samples if s["image_path"] in val_paths]
+        train_set, val_set = train_dataset, val_dataset
+
+    train_labels = [smp["label"] for smp in train_dataset.samples]
+    class_weights = _weights_from_labels(train_labels)
 
     # Offline-augmented copies are added to TRAIN only
     if args.aug_dirs:
         aug_dataset = BreastUltrasoundDataset(
             root_dirs=args.aug_dirs, mode="classification",
-            transform=train_transform, img_size=(args.img_size, args.img_size),
+            transform=train_transform, img_size=size, roi_crop=roi,
         )
         train_set = ConcatDataset([train_set, aug_dataset])
         class_weights = _weights_from_labels(
-            [labels_all[i] for i in train_idx] + [smp["label"] for smp in aug_dataset.samples]
+            train_labels + [smp["label"] for smp in aug_dataset.samples]
         )
     print(f"[Split] Train: {len(train_set)}  Val: {len(val_set)}")
 
@@ -288,8 +306,8 @@ def main():
         resnet, "ResNet50", train_loader, val_loader, args, device, class_weights
     )
 
-    # Train EfficientNetV2
-    efficient = EfficientNetV2B0Classifier(num_classes=2)
+    # Train EfficientNetV2-S (checkpoint keeps the name efficientnetv2_breast.pth)
+    efficient = EfficientNetV2SClassifier(num_classes=2)
     efficient_path = train_single_model(
         efficient, "EfficientNetV2", train_loader, val_loader, args, device, class_weights
     )
@@ -297,7 +315,7 @@ def main():
     print("\n" + "=" * 70)
     print("  ALL CLASSIFIERS TRAINED SUCCESSFULLY")
     print(f"  ResNet50:       {resnet_path}")
-    print(f"  EfficientNetV2: {efficient_path}")
+    print(f"  EfficientNetV2-S: {efficient_path}")
     print("=" * 70 + "\n")
 
 

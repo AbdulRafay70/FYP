@@ -3,7 +3,7 @@ Classification Model Heads for Breast Cancer Detection.
 
 Implements:
 1. ResNet50 classifier with custom head
-2. EfficientNetV2-B0 classifier with custom head
+2. EfficientNetV2-S classifier with custom head
 3. Soft Voting Ensemble combining both models
 4. Trust Score computation for clinical confidence
 
@@ -24,10 +24,10 @@ class ResNet50Classifier(nn.Module):
 
     Architecture:
         ResNet50 (ImageNet pretrained) → AdaptiveAvgPool2d
-        → Dropout(0.5) → Linear(2048, 512) → ReLU → BatchNorm
+        → Dropout(0.5) → Linear(2048, 512) → ReLU → LayerNorm
         → Dropout(0.3) → Linear(512, num_classes)
 
-    The first 6 layers of ResNet50 are frozen to leverage pretrained features
+    The first 6 children of ResNet50 (conv1, bn1, relu, maxpool, layer1, layer2) are frozen to leverage pretrained features
     while allowing fine-tuning of deeper layers for medical domain adaptation.
     """
 
@@ -75,13 +75,13 @@ class ResNet50Classifier(nn.Module):
         return self.backbone.layer4[-1]
 
 
-class EfficientNetV2B0Classifier(nn.Module):
+class EfficientNetV2SClassifier(nn.Module):
     """
-    EfficientNetV2-B0 backbone with custom classification head.
+    EfficientNetV2-S backbone (torchvision efficientnet_v2_s) with custom classification head.
 
     Architecture:
-        EfficientNetV2-B0 (ImageNet pretrained) → AdaptiveAvgPool2d
-        → Dropout(0.5) → Linear(1280, 512) → ReLU → BatchNorm
+        EfficientNetV2-S (ImageNet-1K pretrained, EfficientNet_V2_S_Weights.IMAGENET1K_V1) → AdaptiveAvgPool2d
+        → Dropout(0.5) → Linear(1280, 512) → ReLU → LayerNorm
         → Dropout(0.3) → Linear(512, num_classes)
 
     EfficientNetV2 uses progressive learning and compound scaling for
@@ -92,7 +92,7 @@ class EfficientNetV2B0Classifier(nn.Module):
     def __init__(self, num_classes: int = 2, dropout: float = 0.5):
         super().__init__()
 
-        # Load pretrained EfficientNetV2-B0
+        # Load pretrained EfficientNetV2-S
         self.backbone = models.efficientnet_v2_s(
             weights=models.EfficientNet_V2_S_Weights.IMAGENET1K_V1
         )
@@ -129,9 +129,14 @@ class EfficientNetV2B0Classifier(nn.Module):
         return self.backbone.features[-1]
 
 
+# Backward-compatible alias: the class was previously (incorrectly) named "B0",
+# but the network has always been torchvision's EfficientNetV2-S.
+EfficientNetV2B0Classifier = EfficientNetV2SClassifier
+
+
 class EnsembleClassifier(nn.Module):
     """
-    Soft Voting Ensemble combining ResNet50 and EfficientNetV2-B0.
+    Soft Voting Ensemble combining ResNet50 and EfficientNetV2-S.
 
     The ensemble combines logits from both models using learned weights:
         Final = w_resnet × logits_resnet + w_efficient × logits_efficient
@@ -156,7 +161,7 @@ class EnsembleClassifier(nn.Module):
         super().__init__()
 
         self.resnet = ResNet50Classifier(num_classes=num_classes)
-        self.efficient = EfficientNetV2B0Classifier(num_classes=num_classes)
+        self.efficient = EfficientNetV2SClassifier(num_classes=num_classes)
 
         # Ensemble weights: 60% EfficientNetV2 + 40% ResNet50 (as per UltraXAI design specification)
         self.resnet_weight = resnet_weight

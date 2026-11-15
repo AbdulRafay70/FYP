@@ -102,6 +102,8 @@ async def diagnose_image(request: Request, file: UploadFile = File(...)):
             "efficient_weight": float(results.get("efficient_weight", 0.5)),
             "tumor_detected": results.get("tumor_detected", False),
             "bounding_box": results.get("bounding_box", None),
+            "explained_model": results.get("explained_model"),
+            "message": results.get("message"),
         },
     }
 
@@ -163,23 +165,67 @@ async def get_history():
 @router.websocket("/ws/progress")
 async def websocket_progress(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time processing progress.
+    WebSocket endpoint that runs the pipeline and streams real per-phase progress.
 
-    Sends JSON messages for each pipeline phase:
-        {"phase": 1, "name": "Detection", "status": "processing"}
-        {"phase": 1, "name": "Detection", "status": "complete", "time_ms": 150}
+    Client → server: one JSON message per image
+        {"image": "<base64-encoded PNG/JPG>"}
+    Server → client:
+        {"type": "connected"}
+        {"type": "progress", "phase": 1, "name": "Detection", "status": "processing"}
+        {"type": "progress", "phase": 1, "name": "Detection", "status": "complete", "time_ms": 150.2}
+        ... phases 2-4 ...
+        {"type": "result", "prediction": ..., "confidence": ..., "trust_score": ..., ...}
+        {"type": "error", "detail": "..."}   on failure
     """
+    import asyncio
+    from starlette.websockets import WebSocketDisconnect
+
     await websocket.accept()
+    await websocket.send_json({"type": "connected", "message": "WebSocket connected to UltraXAI pipeline"})
+    loop = asyncio.get_running_loop()
+    pipeline = websocket.app.state.pipeline
 
     try:
         while True:
-            # Wait for messages from client
-            data = await websocket.receive_text()
+            msg = await websocket.receive_json()
+            try:
+                raw = base64.b64decode(msg["image"])
+                image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_GRAYSCALE)
+            except Exception:
+                image = None
+            if image is None:
+                await websocket.send_json({"type": "error", "detail": "Failed to decode image"})
+                continue
 
-            # Echo acknowledgment
+            queue: asyncio.Queue = asyncio.Queue()
+
+            def on_progress(phase, name, status, time_ms=None):
+                loop.call_soon_threadsafe(queue.put_nowait, {
+                    "type": "progress", "phase": phase, "name": name,
+                    "status": status, "time_ms": time_ms,
+                })
+
+            start = time.time()
+            task = loop.run_in_executor(None, pipeline.run_full_pipeline, image, on_progress)
+            while not (task.done() and queue.empty()):
+                try:
+                    await websocket.send_json(await asyncio.wait_for(queue.get(), timeout=0.1))
+                except asyncio.TimeoutError:
+                    pass
+            try:
+                results = task.result()
+            except Exception as e:
+                await websocket.send_json({"type": "error", "detail": f"Pipeline error: {e}"})
+                continue
             await websocket.send_json({
-                "type": "connected",
-                "message": "WebSocket connected to UltraXAI pipeline",
+                "type": "result",
+                "prediction": results.get("prediction", "unknown"),
+                "confidence": float(results.get("confidence", 0.0)),
+                "trust_score": results.get("trust_score", "UNKNOWN"),
+                "tumor_detected": results.get("tumor_detected", False),
+                "bounding_box": results.get("bounding_box"),
+                "phases": results.get("phases", {}),
+                "inference_time_ms": round((time.time() - start) * 1000, 2),
             })
-    except Exception:
+    except WebSocketDisconnect:
         pass

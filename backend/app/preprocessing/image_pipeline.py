@@ -8,6 +8,13 @@ Implements the full preprocessing chain:
 4. Speckle noise reduction
 5. Resize to target resolution
 6. Pixel normalization [0, 1]
+
+NOTE: preprocess_image() is NOT called by the deployed inference pipeline.
+The models were trained with the validation transforms in
+training/data/transforms.py (resize + mean/std normalisation, no CLAHE and
+no denoising), so the orchestrator uses exactly those at inference to keep
+training and inference preprocessing identical. This module is kept as an
+optional enhancement utility for experiments.
 """
 
 import cv2

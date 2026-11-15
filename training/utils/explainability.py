@@ -4,7 +4,10 @@ Explainable AI (XAI) Engine for UltraXAI.
 Implements:
 1. Grad-CAM++ — Generates localized heatmaps showing which image regions
    drove the classification decision
-2. SHAP integration — Provides pixel-level attribution metrics
+2. Ensemble Grad-CAM++ — per-model maps for ResNet50 and EfficientNetV2-S,
+   fused with the ensemble weights and computed for the ENSEMBLE's predicted class
+
+Note: SHAP is NOT implemented in this project (documented as future work).
 
 Reference:
 - Chattopadhay et al., "Grad-CAM++: Generalized Gradient-based Visual
@@ -55,8 +58,16 @@ class GradCAMPlusPlus:
         def backward_hook(module, grad_input, grad_output):
             self.gradients = grad_output[0].detach()
 
-        self.target_layer.register_forward_hook(forward_hook)
-        self.target_layer.register_full_backward_hook(backward_hook)
+        self._handles = [
+            self.target_layer.register_forward_hook(forward_hook),
+            self.target_layer.register_full_backward_hook(backward_hook),
+        ]
+
+    def remove_hooks(self):
+        """Detach the hooks (call when done, otherwise they accumulate on the model)."""
+        for h in self._handles:
+            h.remove()
+        self._handles = []
 
     def generate(
         self,
@@ -245,43 +256,38 @@ def generate_gradcam_for_ensemble(
     input_tensor: torch.Tensor,
     original_image: np.ndarray,
     target_class: Optional[int] = None,
+    resnet_weight: float = 0.5,
+    efficient_weight: float = 0.5,
 ) -> dict:
     """
-    Generate Grad-CAM++ heatmaps for both ensemble models.
+    Grad-CAM++ explanation of the ENSEMBLE decision.
 
-    Args:
-        resnet_model: ResNet50 classifier
-        efficient_model: EfficientNetV2 classifier
-        input_tensor: Preprocessed input (1, 3, 224, 224)
-        original_image: Original image for overlay (H, W)
-        target_class: Target class (None = use predicted)
+    Both models are explained for the same target class (pass the ensemble's
+    predicted class), using each model's last convolutional block
+    (ResNet50: layer4[-1]; EfficientNetV2-S: features[-1]). The combined map is
+    the ensemble-weighted sum  w_R * CAM_R + w_E * CAM_E  (re-normalised to [0, 1]).
 
     Returns:
-        Dictionary with heatmaps and overlays for both models
+        Dictionary with per-model and combined heatmaps/overlays
     """
-    # Grad-CAM for ResNet50
-    resnet_gradcam = GradCAMPlusPlus(
-        resnet_model, resnet_model.get_last_conv_layer()
-    )
-    resnet_heatmap = resnet_gradcam.generate(input_tensor, target_class)
-    resnet_overlay = GradCAMPlusPlus.overlay_heatmap(resnet_heatmap, original_image)
+    maps = {}
+    for name, model in (("resnet", resnet_model), ("efficient", efficient_model)):
+        cam = GradCAMPlusPlus(model, model.get_last_conv_layer())
+        try:
+            maps[name] = cam.generate(input_tensor, target_class)
+        finally:
+            cam.remove_hooks()
 
-    # Grad-CAM for EfficientNet
-    efficient_gradcam = GradCAMPlusPlus(
-        efficient_model, efficient_model.get_last_conv_layer()
-    )
-    efficient_heatmap = efficient_gradcam.generate(input_tensor, target_class)
-    efficient_overlay = GradCAMPlusPlus.overlay_heatmap(efficient_heatmap, original_image)
-
-    # Combined heatmap (average of both)
-    combined_heatmap = (resnet_heatmap + efficient_heatmap) / 2.0
-    combined_overlay = GradCAMPlusPlus.overlay_heatmap(combined_heatmap, original_image)
+    total = resnet_weight + efficient_weight
+    combined = (resnet_weight * maps["resnet"] + efficient_weight * maps["efficient"]) / max(total, 1e-8)
+    if combined.max() > 0:
+        combined = combined / combined.max()
 
     return {
-        "resnet_heatmap": resnet_heatmap,
-        "resnet_overlay": resnet_overlay,
-        "efficient_heatmap": efficient_heatmap,
-        "efficient_overlay": efficient_overlay,
-        "combined_heatmap": combined_heatmap,
-        "combined_overlay": combined_overlay,
+        "resnet_heatmap": maps["resnet"],
+        "resnet_overlay": GradCAMPlusPlus.overlay_heatmap(maps["resnet"], original_image),
+        "efficient_heatmap": maps["efficient"],
+        "efficient_overlay": GradCAMPlusPlus.overlay_heatmap(maps["efficient"], original_image),
+        "combined_heatmap": combined,
+        "combined_overlay": GradCAMPlusPlus.overlay_heatmap(combined, original_image),
     }

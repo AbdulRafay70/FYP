@@ -21,6 +21,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from data.roi import crop_roi_from_mask
+
 
 # Label mapping: string → integer
 LABEL_MAP = {
@@ -62,6 +64,7 @@ class BreastUltrasoundDataset(Dataset):
         transform: Optional[Callable] = None,
         img_size: Tuple[int, int] = (224, 224),
         include_normal: bool = False,
+        roi_crop: bool = False,
     ):
         """
         Args:
@@ -70,6 +73,9 @@ class BreastUltrasoundDataset(Dataset):
             transform: Albumentations transform pipeline
             img_size: Target image size (H, W)
             include_normal: Whether to include normal (non-tumor) cases
+            roi_crop: Classification mode only. Crop the lesion ROI from the
+                ground-truth mask (+15% padding) before resizing, matching the
+                ROI crops the backend feeds the classifiers at inference.
         """
         assert mode in ("classification", "segmentation"), \
             f"Mode must be 'classification' or 'segmentation', got '{mode}'"
@@ -77,6 +83,7 @@ class BreastUltrasoundDataset(Dataset):
         self.mode = mode
         self.transform = transform
         self.img_size = img_size
+        self.roi_crop = roi_crop
 
         # Collect all image paths and labels
         self.samples: List[Dict] = []
@@ -131,8 +138,8 @@ class BreastUltrasoundDataset(Dataset):
                         "source": root_path.name,
                     }
 
-                    # Find corresponding mask if in segmentation mode
-                    if self.mode == "segmentation":
+                    # Find corresponding mask (needed for segmentation and ROI cropping)
+                    if self.mode == "segmentation" or self.roi_crop:
                         mask_path = self._find_mask(img_path)
                         if mask_path is None:
                             continue  # Skip images without masks
@@ -189,6 +196,11 @@ class BreastUltrasoundDataset(Dataset):
         if image is None:
             raise ValueError(f"Failed to load image: {sample['image_path']}")
 
+        if self.mode == "classification" and self.roi_crop:
+            mask = cv2.imread(sample["mask_path"], cv2.IMREAD_GRAYSCALE)
+            if mask is not None:
+                image = crop_roi_from_mask(image, mask)
+
         # Resize
         image = cv2.resize(image, (self.img_size[1], self.img_size[0]))
 
@@ -239,6 +251,8 @@ class BreastUltrasoundDataset(Dataset):
         self, image: np.ndarray, sample: Dict
     ) -> Tuple[torch.Tensor, int]:
         """Load image + label for classification training."""
+        # 3-channel input, identical to the backend (GRAY2RGB before the transform)
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         if self.transform:
             transformed = self.transform(image=image)
             image = transformed["image"]
