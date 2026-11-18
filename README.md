@@ -81,7 +81,7 @@ npm run dev
 Breast ultrasound datasets are small, so UltraXAI uses two levels of augmentation:
 
 1. **Offline expansion** (`training/data/augment_offline.py`) — writes *N* augmented copies of every
-   image (and its mask) to disk, multiplying dataset volume (e.g. `--copies 5` → **6× data**).
+   image (and its mask) to disk, multiplying dataset volume (e.g. `--copies 5` → 5 augmented copies + the original = **6× data**).
    Ultrasound-safe ops: flips, shift/scale/rotate, elastic & grid distortion, speckle
    (multiplicative) noise, Gaussian noise/blur, brightness/contrast, gamma, CLAHE, sharpening.
 2. **Online augmentation** (`training/data/transforms.py`) — random transforms every epoch on the training
@@ -137,6 +137,30 @@ SHA-256, split-manifest SHA-256). `/api/v1/benchmark` serves these numbers; noth
 | Test (unseen) | 66 | 32 | 98 |
 
 Training data grew **452 → 2,712 images (6×, +2,260)**. Validation and test images are never augmented or trained on.
+
+### ✅ Test-set results (98 held-out images, run of 18 Nov 2026)
+
+Copied unrounded from [`evaluation/results/metrics.json`](evaluation/results/metrics.json). Positive class = Malignant.
+
+| Model | Accuracy | Sensitivity | Specificity | Precision | F1 | AUC-ROC | TP / TN / FP / FN |
+|---|---|---|---|---|---|---|---|
+| ResNet50 | 0.8571428571428571 | 0.90625 | 0.8333333333333334 | 0.725 | 0.8055555555555556 | 0.9337121212121212 | 29 / 55 / 11 / 3 |
+| EfficientNetV2-S | 0.9183673469387755 | 0.90625 | 0.9242424242424242 | 0.8529411764705882 | 0.8787878787878788 | 0.9592803030303031 | 29 / 61 / 5 / 3 |
+| Ensemble (0.40 / 0.60) | 0.8979591836734694 | 0.90625 | 0.8939393939393939 | 0.8055555555555556 | 0.8529411764705882 | 0.9734848484848485 | 29 / 59 / 7 / 3 |
+
+| Segmentation (Attention U-Net, epoch 57) | Dice | IoU | Pixel accuracy | Hausdorff |
+|---|---|---|---|---|
+| Test masks | 0.7316451072692871 | 0.6352987885475159 | 0.9486442194094045 | 105.04971736215042 |
+
+YOLOv8m-Seg detection was not quantitatively evaluated (no `data.yaml` for the test split).
+
+| Training (Quadro T1000, PyTorch 2.6.0, CUDA 12.4) | Precision | Epochs run | Best validation epoch |
+|---|---|---|---|
+| ResNet50 | AMP (float16) | 26 (early stop, patience 15) | 11: F1 0.84375, AUC 0.936461 |
+| EfficientNetV2-S | float32 (float16 gave NaN loss) | 53 (early stop, patience 15) | 38: F1 0.870968, AUC 0.912512 |
+| Attention U-Net | float32, 452 original train images | 74 (patience 20, max 150) | 57: Dice 0.67948776, IoU 0.5943793 |
+
+Train a single classifier or disable AMP with `--models efficientnetv2 --no_amp efficientnetv2`.
 
 ## 📈 Accuracy Improvements
 
