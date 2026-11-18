@@ -1,0 +1,83 @@
+{
+  "task": "binary classification: Benign (0) vs Malignant (1); positive class = Malignant",
+  "test_set": {
+    "dir": "datasets/prepared/test",
+    "n": 98,
+    "benign": 66,
+    "malignant": 32
+  },
+  "classification_ms_per_image": 69.16090663598509,
+  "classification": {
+    "ResNet50": {
+      "accuracy": 0.8571428571428571,
+      "sensitivity": 0.90625,
+      "specificity": 0.8333333333333334,
+      "precision": 0.725,
+      "f1_score": 0.8055555555555556,
+      "npv": 0.9482758620689655,
+      "true_positives": 29,
+      "true_negatives": 55,
+      "false_positives": 11,
+      "false_negatives": 3,
+      "auc_roc": 0.9337121212121212
+    },
+    "EfficientNetV2-S": {
+      "accuracy": 0.9183673469387755,
+      "sensitivity": 0.90625,
+      "specificity": 0.9242424242424242,
+      "precision": 0.8529411764705882,
+      "f1_score": 0.8787878787878788,
+      "npv": 0.953125,
+      "true_positives": 29,
+      "true_negatives": 61,
+      "false_positives": 5,
+      "false_negatives": 3,
+      "auc_roc": 0.9592803030303031
+    },
+    "Ensemble (0.40/0.60)": {
+      "accuracy": 0.8979591836734694,
+      "sensitivity": 0.90625,
+      "specificity": 0.8939393939393939,
+      "precision": 0.8055555555555556,
+      "f1_score": 0.8529411764705882,
+      "npv": 0.9516129032258065,
+      "true_positives": 29,
+      "true_negatives": 59,
+      "false_positives": 7,
+      "false_negatives": 3,
+      "auc_roc": 0.9734848484848485
+    }
+  },
+  "segmentation": {
+    "model": "Attention U-Net",
+    "dice": 0.7316451072692871,
+    "iou": 0.6352987885475159,
+    "pixel_accuracy": 0.9486442194094045,
+    "hausdorff_distance": 105.04971736215042,
+    "dice_std": 0.2713536322116852,
+    "iou_std": 0.27839159965515137
+  },
+  "detection": "not evaluated: pass --yolo_data (data.yaml with test split) and YOLO weights",
+  "run_record": {
+    "environment": {
+      "timestamp": "2026-11-18T19:36:23",
+      "git_commit": "bdf0317",
+      "python": "3.12.0",
+      "torch": "2.6.0+cu124",
+      "cuda": "12.4",
+      "gpu": "Quadro T1000",
+      "platform": "Windows-11-10.0.26200-SP0"
+    },
+    "checkpoints_sha256": {
+      "resnet50_breast.pth": "b3a9989127264e4c507c3447de2b6d41ce668a3f5646f5a54f695e13c99c8747",
+      "efficientnetv2_breast.pth": "e4adbd759799fb488cc1149e9fe4458742f3fd02955b106c1c963d9d84f56a7f",
+      "attention_unet_breast.pth": "6c00970cae63d3adf62365aab280aec1cf436e120abd96fd7f26ca68847a058a",
+      "yolov8m_seg_breast.pt": "b4189b4cf44700a7e94a4928a3c8317a17305a9b1d9370ffc1f13e0bc6e4e980"
+    },
+    "split_manifest_sha256": "1126f79d8a08cad26bb4cf477c8f083aaba6629aaee29eb8831a97163e0bfc1f",
+    "ensemble_weights": {
+      "resnet50": 0.4,
+      "efficientnetv2_s": 0.6
+    }
+  }
+}

@@ -60,6 +60,11 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
     parser.add_argument("--no_tta", action="store_true", help="Disable flip test-time augmentation")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--models", nargs="+", default=["resnet50", "efficientnetv2"],
+                        choices=["resnet50", "efficientnetv2"], help="Which classifiers to train")
+    parser.add_argument("--no_amp", nargs="*", default=None,
+                        help="Train in float32 (no mixed precision). Give model names to limit it, "
+                             "e.g. --no_amp efficientnetv2; with no names it applies to all models")
     return parser.parse_args()
 
 
@@ -100,7 +105,9 @@ def train_single_model(
         progress = (epoch - args.warmup_epochs) / max(1, args.epochs - args.warmup_epochs)
         return 0.5 * (1 + np.cos(np.pi * progress))
     scheduler = LambdaLR(optimizer, lr_lambda)
-    use_amp = device.type == "cuda"
+    key = model_name.lower().replace(" ", "_")
+    fp32 = args.no_amp is not None and (len(args.no_amp) == 0 or key in args.no_amp)
+    use_amp = device.type == "cuda" and not fp32
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     best_f1 = -1.0
@@ -112,7 +119,7 @@ def train_single_model(
         "optimizer": "AdamW", "scheduler": f"linear warmup ({args.warmup_epochs} ep) + cosine",
         "loss": f"weighted CrossEntropy (label_smoothing={args.label_smoothing})",
         "class_weights": class_weights.tolist(), "grad_clip": 1.0,
-        "amp": device.type == "cuda", "selection": "best val F1 (Malignant = positive)",
+        "amp": use_amp, "selection": "best val F1 (Malignant = positive)",
         "n_train": len(train_loader.dataset), "n_val": len(val_loader.dataset),
     })
     logger = EpochLogger(args.output_dir, log_name)
@@ -156,6 +163,10 @@ def train_single_model(
             train_total += labels.size(0)
 
         train_acc = train_correct / max(train_total, 1)
+        if not np.isfinite(train_loss):
+            raise RuntimeError(
+                f"{model_name}: training loss is NaN/inf at epoch {epoch} "
+                f"(amp={use_amp}). Retry with --no_amp {key}.")
 
         # --- Validate ---
         model.eval()
@@ -300,22 +311,24 @@ def main():
 
     print(f"[Class Weights] {class_weights}")
 
-    # Train ResNet50
-    resnet = ResNet50Classifier(num_classes=2)
-    resnet_path = train_single_model(
-        resnet, "ResNet50", train_loader, val_loader, args, device, class_weights
-    )
+    paths = {}
+    if "resnet50" in args.models:
+        resnet = ResNet50Classifier(num_classes=2)
+        paths["ResNet50"] = train_single_model(
+            resnet, "ResNet50", train_loader, val_loader, args, device, class_weights
+        )
 
-    # Train EfficientNetV2-S (checkpoint keeps the name efficientnetv2_breast.pth)
-    efficient = EfficientNetV2SClassifier(num_classes=2)
-    efficient_path = train_single_model(
-        efficient, "EfficientNetV2", train_loader, val_loader, args, device, class_weights
-    )
+    # EfficientNetV2-S (checkpoint keeps the name efficientnetv2_breast.pth)
+    if "efficientnetv2" in args.models:
+        efficient = EfficientNetV2SClassifier(num_classes=2)
+        paths["EfficientNetV2-S"] = train_single_model(
+            efficient, "EfficientNetV2", train_loader, val_loader, args, device, class_weights
+        )
 
     print("\n" + "=" * 70)
-    print("  ALL CLASSIFIERS TRAINED SUCCESSFULLY")
-    print(f"  ResNet50:       {resnet_path}")
-    print(f"  EfficientNetV2-S: {efficient_path}")
+    print("  CLASSIFIERS TRAINED SUCCESSFULLY")
+    for name, path in paths.items():
+        print(f"  {name}: {path}")
     print("=" * 70 + "\n")
 
 
